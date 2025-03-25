@@ -101,7 +101,7 @@ def main(args_eval, resume_preempt=False):
     folder = os.path.join(pretrain_folder, 'video_classification_frozen/')
     if not os.path.exists(folder):
         os.makedirs(folder, exist_ok=True)
-    latest_path = os.path.join(folder, f'k400-probe.pth.tar')
+    latest_path = os.path.join(folder, f'attentive-probe.pth.tar')
 
     # -- pretrained encoder (frozen)
     encoder = init_model(
@@ -133,11 +133,15 @@ def main(args_eval, resume_preempt=False):
 
     # -- init classifier
     classifier = AttentiveClassifier(
-        embed_dim=1280,
-        num_heads=16,
+        embed_dim=encoder.embed_dim,
+        num_heads=encoder.num_heads,
         depth=1,
         num_classes=num_classes,
     ).to(device)
+    
+    print("number of classes: ", num_classes)
+    print(f"Encoder output dim: {encoder.embed_dim}, Classifier input dim: {classifier.embed_dim}")
+    
 
     test_loader = make_dataloader(
         dataset_type=dataset_type,
@@ -156,6 +160,7 @@ def main(args_eval, resume_preempt=False):
 
     ipe = len(test_loader)
     print(f'Dataloader created... iterations per epoch: {ipe}')
+    print("Unique Test Labels:", np.unique([data[1].cpu().numpy() for data in test_loader]))
 
     # -- optimizer and scheduler
     optimizer, scaler, scheduler, wd_scheduler = init_opt(
@@ -207,7 +212,15 @@ def load_checkpoint(
         
         # -- loading classifier
         pretrained_dict = checkpoint['classifier']
-        msg = classifier.load_state_dict(pretrained_dict, strict=False)
+        
+        new_pretrained_dict = {}
+        for k, v in pretrained_dict.items():
+            if k.startswith("module."):
+                new_pretrained_dict[k[7:]] = v  # Remove "module."
+            else:
+                new_pretrained_dict[k] = v
+        
+        msg = classifier.load_state_dict(new_pretrained_dict, strict=False)
         print(f'loaded pretrained classifier from epoch {epoch} with msg: {msg}')
 
         # -- loading optimizer
@@ -419,7 +432,6 @@ def predict_label(
                     probs = sum([sum([F.softmax(ost, dim=1) for ost in os]) for os in outputs]) / len(outputs) / len(outputs[0])
 
 
-                # Log results in CSV
                 predictions = probs.argmax(dim=1).cpu().numpy()
                 confidences = probs.max(dim=1).values.cpu().numpy()
                 labels_cpu = labels.cpu().numpy()
