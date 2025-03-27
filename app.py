@@ -49,7 +49,7 @@ def generate_response(text_input, vinput):
     save_msg = video_saver(vinput)
     print(save_msg)
     #output = llm_api_request(text_input, "hello")
-    return load_jepa_predictor("config_and_stuff/vith16_k400_16x8x3.yaml")
+    return load_jepa_predictor("config_and_stuff/vitl16_k400_16x8x3.yaml")
 
 #create Gradio interface
 def create_interface():
@@ -69,7 +69,6 @@ def load_jepa_predictor(fname):
     with open(fname, 'r') as y_file:
         params = yaml.load(y_file, Loader=yaml.FullLoader)
     predicted_label, confidence_score = jepa_classifier.main(params)
-    print("AHHHHHHHHHHHHHHHHHHHHHH Predicted Label:", predicted_label)
     return predicted_label, confidence_score
 
 if __name__ == "__main__":

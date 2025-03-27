@@ -23,7 +23,7 @@ optimization:
   warmup: 0.
   use_bfloat16: true
 pretrain:
-  model_name: vit_huge
+  model_name: vit_large
   checkpoint_key: target_encoder
   clip_duration: null
   frames_per_clip: 16

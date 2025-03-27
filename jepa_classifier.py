@@ -94,6 +94,7 @@ def main(args_eval, resume_preempt=False):
     else:
         device = torch.device('cuda:0')
         torch.cuda.set_device(device)
+    print(f"Using device: {device}")
 
     world_size, rank = init_distributed()
       
@@ -138,10 +139,7 @@ def main(args_eval, resume_preempt=False):
         depth=1,
         num_classes=num_classes,
     ).to(device)
-    
-    print("number of classes: ", num_classes)
-    print(f"Encoder output dim: {encoder.embed_dim}, Classifier input dim: {classifier.embed_dim}")
-    
+
 
     test_loader = make_dataloader(
         dataset_type=dataset_type,
@@ -160,7 +158,7 @@ def main(args_eval, resume_preempt=False):
 
     ipe = len(test_loader)
     print(f'Dataloader created... iterations per epoch: {ipe}')
-    print("Unique Test Labels:", np.unique([data[1].cpu().numpy() for data in test_loader]))
+    #print("Unique Test Labels:", np.unique([data[1].cpu().numpy() for data in test_loader]))
 
     # -- optimizer and scheduler
     optimizer, scaler, scheduler, wd_scheduler = init_opt(
@@ -175,6 +173,7 @@ def main(args_eval, resume_preempt=False):
         use_bfloat16=use_bfloat16)
     
     #classifier = DistributedDataParallel(classifier, static_graph=True)
+    
     classifier, optimizer, scaler, epoch = load_checkpoint(
         device=device,
         r_path=latest_path,
@@ -395,23 +394,25 @@ def predict_label(
         attend_across_segments
 ):
     classifier.eval()
-    encoder.eval()
     criterion = torch.nn.CrossEntropyLoss()
 
-    with torch.no_grad():
-        for itr, data in enumerate(test_loader):
-            with torch.cuda.amp.autocast(dtype=torch.float16, enabled=use_bfloat16):
-                # Load data and move to device
-                clips = [
-                    [dij.to(device, non_blocking=True) for dij in di]  # Spatial views
-                    for di in data[0]  # Temporal clips
-                ]
-                clip_indices = [d.to(device, non_blocking=True) for d in data[2]]
-                labels = data[1].to(device)
-                batch_size = len(labels)
+    for itr, data in enumerate(test_loader):
+        with torch.cuda.amp.autocast(dtype=torch.float16, enabled=use_bfloat16):
+            # Load data and move to device
+            clips = [
+                [dij.to(device, non_blocking=True) for dij in di]  # Spatial views
+                for di in data[0]  # Temporal clips
+            ]
 
+            print(f"Clip shape: {clips[0][0].shape}")
+
+            clip_indices = [d.to(device, non_blocking=True) for d in data[2]]
+            labels = data[1].to(device)
+            batch_size = len(labels)
+
+            with torch.no_grad():
                 # Forward pass through the encoder
-                outputs = encoder(clips, clip_indices)
+                outputs = encoder(clips, clip_indices)            
 
                 # Forward pass through the classifier
                 if attend_across_segments:
@@ -419,23 +420,24 @@ def predict_label(
                 else:
                     outputs = [[classifier(ost) for ost in os] for os in outputs]
 
-                # Compute loss
-                if attend_across_segments:
-                    loss = sum([criterion(o, labels) for o in outputs]) / len(outputs)
-                else:
-                    loss = sum([sum([criterion(ost, labels) for ost in os]) for os in outputs]) / len(outputs) / len(outputs[0])
+            # Compute loss
+            if attend_across_segments:
+                loss = sum(criterion(o, labels) for o in outputs) / len(outputs)
+            else:
+                loss = sum(criterion(ost, labels) for os in outputs for ost in os) / (len(outputs) * len(outputs[0]))
 
-                # Compute accuracy
-                if attend_across_segments:
-                    probs = sum([F.softmax(o, dim=1) for o in outputs]) / len(outputs)
-                else:
-                    probs = sum([sum([F.softmax(ost, dim=1) for ost in os]) for os in outputs]) / len(outputs) / len(outputs[0])
+            print(f"Loss: {loss.item()}")
 
+            # Compute accuracy
+            if attend_across_segments:
+                outputs = sum(outputs) / len(outputs)
+            else:
+                outputs = sum([sum(os) / len(os) for os in outputs]) / len(outputs)
 
-                predictions = probs.argmax(dim=1).cpu().numpy()
-                confidences = probs.max(dim=1).values.cpu().numpy()
-                labels_cpu = labels.cpu().numpy()
+            # Calculate confidence and predictions
+            probs = F.softmax(outputs, dim=1)
+            confidences, predicted_labels = torch.max(probs, 1)
 
-    prediction_label = int(predictions[0])
-    confidence_score = float(confidences[0])
-    return prediction_label, confidence_score
+        print(f"Confidence: {confidences}, Predicted Label: {predicted_labels}")
+
+    return predicted_labels.tolist(), confidences.tolist()
