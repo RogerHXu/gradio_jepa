@@ -1,0 +1,9 @@
+#ignore checkpoints
+*.pth.tar
+
+#ignore videos
+*.mp4
+
+#misc
+__pycache__/
+.env
